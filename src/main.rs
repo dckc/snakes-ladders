@@ -13,29 +13,29 @@ enum Command {
     // 1. board 3 4 command: specifies the number of columns and rows
     // for the board. The total number of cells cannot exceed 999.
     Board { columns: usize, rows: usize },
-    
+
     // 2. players 2 command: specified the number of players, who are
     // named: A, B, ... There can be up to 26 players.
     Players (PlayerIx),
-    
+
     // 3. dice 1 2 2 2 2 command: specifies the sequence of dice
     // rolls. The sequence will repeat indefinitely - e.g. the example
     // above would produce the sequence 1, 2, 2, 2, 2, 1, 2, 2, 2, 2,
     // 1, 2, 2, ...
     Dice (Vec<DieDots>),
-    
+
     // 4. ladder 5 11 command: creates a ladder that starts at the
     // first number and ends at the second number - i.e. if the player
     // lands on the first cell they are transported to land on the
     // second cell.
     Ladder { starts: CellIx, ends: CellIx },
-    
+
     // 5. snake 8 4 command: creates a snake that starts at the first
     // number and ends at the second number - i.e. if the player lands
     // on the first cell they are transported to land on the second
     // cell.
     Snake { starts: CellIx, ends: CellIx },
-    
+
     // 6. powerup type cell list command describes a powerup that is
     // applied to a series of cells. When a player lands on a powerup
     // cell they acquire that powerup and retain it until they use
@@ -43,43 +43,38 @@ enum Command {
     // cell can be triggered any number of times by any player, but
     // they do not accumulate - a player either has the powerup or
     // they don't.
-    PowerUps { typ: SubCommand, cells: Vec<CellIx> },
-    
+    PowerUps { typ: PowerType, cells: Vec<CellIx> },
+
     // 7. turns 10 command: plays the specified number of turns (or
-    // until a player wins the game). A turn means each player, in
-    // order, rolls the dice, and then moves that many cells (or
-    // double if they have the powerup). If the (possibly doubled)
-    // roll would take them past the end of the board, they don't
-    // move, and play proceeds to the next player. As soon as a player
-    // wins, the game is over and the turns stop.
+    // until a player wins the game).
     Turns (usize)
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-enum SubCommand {
-    
+enum PowerType {
+
     // 1. powerup escalator 6 9 sub-command: makes the next ladder
     // cell a player steps onto twice as boosting - i.e. they move
     // twice as far up the board. If the boost takes them past the end
     // of the board, they get moved to the last cell, and hence win.
     Escalator,
-    
+
     // 2. powerup antivenom 7 sub-command: make the player immune to
     // the next snake cell they step onto - i.e. they don't slide down
     // the snake.
     Antivenom,
-        
+
     // 3. powerup double 5 sub-command:
     // doubles the next dice roll.
     Double
 }
 
-impl SubCommand {
+impl PowerType {
     fn label(&self) -> String {
         match self {
-            &SubCommand::Escalator => "e",
-            &SubCommand::Antivenom => "a",
-            &SubCommand::Double => "d",
+            &PowerType::Escalator => "e",
+            &PowerType::Antivenom => "a",
+            &PowerType::Double => "d",
         }.into()
     }
 }
@@ -113,7 +108,7 @@ impl Command {
                 Snake { starts: num(ps[0]),
                         ends: num(ps[1]) },
             ("powerup", ref ps) => PowerUps {
-                typ: SubCommand::new(ps[0]),
+                typ: PowerType::new(ps[0]),
                 cells: ps[1..].iter().map(|s| num(*s)).collect() },
             ("turns", ref ps) if ps.len() == 1 => Turns(num(ps[0])),
             _ => panic!("bad keyword")
@@ -121,9 +116,9 @@ impl Command {
     }
 }
 
-impl SubCommand {
-    fn new(name: &str) -> SubCommand {
-        use SubCommand::*;
+impl PowerType {
+    fn new(name: &str) -> PowerType {
+        use PowerType::*;
 
         match name {
             "escalator" => Escalator,
@@ -150,7 +145,7 @@ enum CellProperty {
     // TODO: Collapse SnakeStart and LadderStart
     SnakeStart { end: CellIx },
     LadderStart { end: CellIx },
-    PowerUp(SubCommand),
+    PowerUp(PowerType),
     Winning,
 }
 
@@ -182,88 +177,124 @@ board will not produce any bump loops during play.
 
 
 #[derive(PartialEq, Eq, Debug, Default)]
-struct BoardState {
-    columns: usize,
-    rows: usize,
-    board: Vec<CellProperty>,
-    player_pos: Vec<CellIx>, // 0 = off board at start
+struct GameState {
+    board: BoardConfig,
+    players: Vec<PlayerState>,
     dice: Vec<DieDots>,
     turn: usize,
 }
 
-impl BoardState {
+#[derive(PartialEq, Eq, Clone, Debug, Default)]
+struct PlayerState {
+    loc: CellIx,
+    powerup: Option<PowerType>
+}
+
+impl PlayerState {
+    fn move_dest(&mut self, die: u8) -> (usize, usize) {
+        if self.powerup == Some(PowerType::Double) {
+            self.powerup = None;
+            ((die * 2) as usize, self.loc)
+        } else {
+            (die as usize, self.loc)
+        }
+    }
+
+    fn land_on(&mut self, cell: &CellProperty, cell_qty: usize) -> bool {
+        use CellProperty::*;
+        use PowerType::*;
+
+        let mut win = false;
+        match *cell {
+            Plain => {},
+            Winning => win = true,
+            SnakeStart {..} if self.powerup == Some(Antivenom) => {
+                self.powerup = None
+            },
+            SnakeStart { end: there } => self.loc = there,
+            LadderStart { end: there }
+            if self.powerup == Some(Escalator) => {
+                self.loc += 2 * (there - self.loc);
+                if self.loc > cell_qty {
+                    win = false;
+                    self.loc = cell_qty;
+                }
+                self.powerup = None
+            }
+            LadderStart { end: there } => self.loc = there,
+            PowerUp(ref pt) => self.powerup = Some(pt.clone()),
+        }
+        win
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Default)]
+struct BoardConfig {
+    columns: usize,
+    rows: usize,
+    cells: Vec<CellProperty>,
+}
+
+impl GameState {
     // 3. Your module must have a print function that formats the current
     // state of the board as a string.
     fn print(&self) -> String {
         let mut rev_out: Vec<String> = vec!();
-        let sep = BoardState::between_columns();
+        let sep = GameState::between_columns();
 
-        for row in 1..(self.rows + 1) {
+        if let Some(which) = self.winner() {
+            rev_out.push(format!("Player {} won", player_name(which as u8)))
+        }
+
+        for row in 1..(self.board.rows + 1) {
             let mut first_line = String::from("");
             let mut second_line = String::from("");
-            for column in 1..(self.columns + 1) {
-                let ix = self.back_and_forth(row, column);
+            for column in 1..(self.board.columns + 1) {
+                let ix = self.board.back_and_forth(row, column);
 
                 first_line.push(sep);
                 second_line.push(sep);
 
-                first_line.push_str(&BoardState::cell_first_line(ix));
+                first_line.push_str(&BoardConfig::cell_first_line(ix));
                 second_line.push_str(&self.cell_second_line(ix));
             }
             first_line.push(sep);
             second_line.push(sep);
 
-            rev_out.push(self.between_rows());
+            rev_out.push(self.board.between_rows());
             rev_out.push(second_line);
             rev_out.push(first_line);
         }
-        rev_out.push(self.between_rows());
-        //TODO: winner line
+        rev_out.push(self.board.between_rows());
         rev_out.reverse();
         return rev_out.join("\n");
     }
 
     // 1. If no player has won, that last line would not appear at all.
-    //TODO: fn winner_line
-
-    // 2. The cell numbering starts at the bottom left, and loops back
-    // and forth.
-    fn back_and_forth(&self, row: usize, column: usize) -> CellIx {
-        // ideally we'd make an iterator, but that's a pain.
-        (row - 1) * self.columns + (
-            if row % 2 == 1 { column }
-            else { self.columns - column + 1 }
-        )
-    }
-    
-    // 3. Lines between rows are drawn as sequences
-    // of + and - characters, as shown.
-    fn between_rows(&self) -> String {
-        "+---".repeat(self.columns as usize) + "+".into()
+    fn winner(&self) -> Option<usize> {
+        let won = |which: &usize| {
+            let loc = self.players[*which].loc;
+            self.board.cells[loc - 1] == CellProperty::Winning
+        };
+        (0..self.players.len()).find(won)
     }
 
     // 4. Lines between columns are drawn with | characters, as shown.
     fn between_columns() -> char { '|' }
 
-    // 5. Cells are printed in 2 lines. The first line is the cell
-    // number, right justified with spaces.
-    fn cell_first_line(ix: CellIx) -> String{
-        format!("{:>3}", ix)
-    }
-    
     // The second line has: the player or blank, followed by the first
     // letter of the powerup or blank, followed by the start of a
     // snake or ladder, or blank.
     fn cell_second_line(&self, ix: CellIx) -> String {
-        let which = (0..(self.player_pos.len())).find(
-            |p| self.player_pos[*p] == ix);
+        let which = (0..(self.players.len())).find(
+            |p| self.players[*p].loc == ix);
         let player_spot = match which {
             Some(p) => player_name(p as u8),
             None => ' '
         };
-        format!("{}{}", player_spot, self.board[ix - 1].label())
+        format!("{}{}", player_spot, self.board.cells[ix - 1].label())
     }
-    
+
     // 6. The output must be exactly as shown, as automatic comparison
     // will be part of marking.
 
@@ -277,47 +308,112 @@ impl BoardState {
 
         match command {
             Board { columns: y, rows: x } => {
-                self.columns = y;
-                self.rows = x;
-                self.board = vec![Plain; x * y];
+                self.board.columns = y;
+                self.board.rows = x;
+                self.board.cells = vec![Plain; x * y];
+                self.board.cells[x * y - 1] = Winning;
             },
             Players(n) => {
-                self.player_pos = vec![0; n as usize]
+                self.players = vec![
+                    PlayerState { loc: 1, ..PlayerState::default()};
+                    n as usize];
             },
             Dice(ds) => { self.dice = ds },
             Ladder { starts: s, ends: e } => {
-                self.board[s - 1] = LadderStart { end: e }
+                self.board.cells[s - 1] = LadderStart { end: e }
             },
             Snake { starts: s, ends: e } => {
-                self.board[s - 1] = SnakeStart { end: e }
+                self.board.cells[s - 1] = SnakeStart { end: e }
             },
             PowerUps { typ: pt, cells: cs } => {
                 for c in cs {
-                    self.board[c - 1] = PowerUp(pt.clone())
+                    self.board.cells[c - 1] = PowerUp(pt.clone())
                 }
             },
-            Turns(n) => {
-                for _ in 0..n {
-                    let player = (self.turn % self.player_pos.len()) as usize;
-                    let die = self.dice[self.turn % self.dice.len()];
-                    println!("@@start turn: player {} rolls {}",
-                             player_name(player as u8), die);
-                    self.player_pos[player] += die as usize;
-
-                    /*
-                    Handle snakes, ladders, powerups
-                    loop {
-                        match self.board[target] {
-                            SnakeStart { end: t2 } => target = t2,
-                            LadderStart { end: t2 } => target = t2,
-                            PowerUp(Escalator)
+            Turns(qty) => {
+                for turn in 0..qty {
+                    println!("turn {} of {}", turn + 1, qty);
+                    for which_player in 0..self.players.len() {
+                        if ! self.take_turn(which_player) {
+                            return
                         }
-                     */
-                    self.turn += 1;
-                    println!("@@board:\n{}\n{:?}", self.print(), self);
+                    }
                 }
             },
         }
+    }
+
+    // A turn means each player, in order, rolls the dice, and then
+    // moves that many cells (or double if they have the powerup). If
+    // the (possibly doubled) roll would take them past the end of the
+    // board, they don't move, and play proceeds to the next
+    // player. As soon as a player wins, the game is over and the
+    // turns stop.
+    fn take_turn(&mut self, who: usize) -> bool {
+        let (mut delta, loc) = {
+            let die = self.dice[self.turn % self.dice.len()];
+            self.turn += 1;
+            println!("@@start turn: player {} rolls {}",
+                     player_name(who as u8), die);
+            let player = &mut self.players[who];
+            player.move_dest(die)
+        };
+        let cells_len = self.board.cells.len();
+        if loc + delta > cells_len {
+            println!("@@cannot move");
+            return true
+        }
+
+        let mut which_player = who;
+
+        loop {
+            let loc = {
+                let player = &mut self.players[which_player];
+
+                player.loc += delta;
+                let loc = player.loc;
+                let win = player.land_on(
+                    &self.board.cells[loc - 1], cells_len);
+                if win { return false }
+                player.loc
+            };
+
+            let already = (0..self.players.len())
+                .find(|&pl_ix| pl_ix != which_player &&
+                      loc == self.players[pl_ix].loc);
+            if let Some(which) = already {
+                which_player = which;
+                delta = 1;
+            } else {
+                break;
+            }
+        }
+        println!("@@board:\n{}\n{:?}", self.print(), self);
+        true
+    }
+}
+
+impl BoardConfig {
+    // 2. The cell numbering starts at the bottom left, and loops back
+    // and forth.
+    fn back_and_forth(&self, row: usize, column: usize) -> CellIx {
+        // ideally we'd make an iterator, but that's a pain.
+        (row - 1) * self.columns + (
+            if row % 2 == 1 { column }
+            else { self.columns - column + 1 }
+        )
+    }
+
+    // 3. Lines between rows are drawn as sequences
+    // of + and - characters, as shown.
+    fn between_rows(&self) -> String {
+        "+---".repeat(self.columns as usize) + "+".into()
+    }
+
+    // 5. Cells are printed in 2 lines. The first line is the cell
+    // number, right justified with spaces.
+    fn cell_first_line(ix: CellIx) -> String{
+        format!("{:>3}", ix)
     }
 }
 
@@ -335,7 +431,7 @@ fn main() {
     use std::io;
     use std::io::BufRead;
 
-    let mut game = BoardState::default();
+    let mut game = GameState::default();
     let stdin = io::stdin();
 
     // 1. The input is a series of lines, each containing one command.
@@ -391,7 +487,7 @@ turns 10
     #[test]
     fn parse_sample_input() {
         use Command::*;
-        use SubCommand::*;
+        use PowerType::*;
         let lines: Vec<_> = SAMPLE_INPUT.trim().lines().collect();
 
         assert!(Command::readFrom(lines[0].into()) ==
@@ -412,7 +508,7 @@ turns 10
                 PowerUps{ typ: Double, cells: vec!(4) });
         assert!(Command::readFrom(lines[8].into()) ==
                 Turns(10));
-        
+
     }
 
     const RESULTING_OUTPUT: &'static str = "
@@ -434,13 +530,14 @@ Player B won
 
     #[test]
     fn make_sample_output() {
-        let mut game = BoardState::default();
-        
+        let mut game = GameState::default();
+
         for line in SAMPLE_INPUT.trim().lines() {
             let cmd = Command::readFrom(line.into());
             game.apply(cmd);
         }
 
+        println!("{}", game.print()); //@@
         assert!(game.print() == RESULTING_OUTPUT.trim());
     }
 
