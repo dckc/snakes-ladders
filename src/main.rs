@@ -1,5 +1,8 @@
 // A simple Snakes and Ladders game
 
+#![cfg_attr(feature="clippy", feature(plugin))]
+#![cfg_attr(feature="clippy", plugin(clippy))]
+
 // The total number of cells cannot exceed 999.
 type CellIx = usize;
 const MAX_CELLS: usize = 999;
@@ -104,7 +107,7 @@ impl GameState {
         }
         rev_out.push(self.board.between_rows());
         rev_out.reverse();
-        return rev_out.join("\n");
+        rev_out.join("\n")
     }
 
     // The second line has: the player or blank, followed by the first
@@ -345,7 +348,6 @@ impl BoardConfig {
             Plain => {}
             Winning => win = true,
             SnakeStart { .. } if player.powerup == Some(Antivenom) => player.use_antivenom(),
-            SnakeStart { end: there } => player.go(there),
             LadderStart { end: there } if player.powerup == Some(Escalator) => {
                 player.use_escalator(there);
                 if player.loc >= cell_qty {
@@ -353,7 +355,7 @@ impl BoardConfig {
                     player.go(cell_qty);
                 }
             }
-            LadderStart { end: there } => player.go(there),
+            SnakeStart { end: there } | LadderStart { end: there } => player.go(there),
             PowerUp(ref pt) => player.set_powerup(pt.clone()),
         }
         win
@@ -376,12 +378,11 @@ enum CellProperty {
 impl CellProperty {
     fn label(&self) -> String {
         use CellProperty::*;
-        match self {
-            &Plain => "  ".into(),
-            &SnakeStart { .. } => " S".into(),
-            &LadderStart { .. } => " L".into(),
-            &PowerUp(ref pt) => pt.label() + " ",
-            &Winning => "  ".into(),
+        match *self {
+            Plain | Winning => "  ".into(),
+            SnakeStart { .. } => " S".into(),
+            LadderStart { .. } => " L".into(),
+            PowerUp(ref pt) => pt.label() + " ",
         }
     }
 }
@@ -389,7 +390,7 @@ impl CellProperty {
 
 // Players are named: A, B, ... There can be up to 26 players.
 fn player_name(pix: PlayerIx) -> char {
-    (('A' as u8) + (pix as u8)) as char
+    (b'A' + pix as u8) as char
 }
 
 
@@ -424,10 +425,10 @@ impl PowerType {
     }
 
     fn label(&self) -> String {
-        match self {
-                &PowerType::Escalator => "e",
-                &PowerType::Antivenom => "a",
-                &PowerType::Double => "d",
+        match *self {
+                PowerType::Escalator => "e",
+                PowerType::Antivenom => "a",
+                PowerType::Double => "d",
             }
             .into()
     }
