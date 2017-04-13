@@ -153,10 +153,11 @@ impl GameState {
                 }
             }
             Turns(qty) => {
-                for _ in 0..qty {
+                for _turn in 0..qty {
                     // println!("turn {} of {}", turn + 1, qty);
                     for which_player in 0..self.players.len() {
                         if self.player_turn_wins(which_player) {
+                            // println!("WIN!\n{}", self.print());
                             return;
                         }
                     }
@@ -194,7 +195,8 @@ impl GameState {
             (player.use_double(die), player.loc)
         };
         if start_loc + delta > self.board.size() {
-            // println!("cannot move");
+            // println!("cannot move: {} > {}",
+            //          start_loc + delta, self.board.size());
             return false;
         }
 
@@ -207,6 +209,7 @@ impl GameState {
                 if self.board.move_wins(player, delta) {
                     return true;
                 }
+                // println!("player {} moved to {}", player_name(current_player), player.loc);
                 player.loc
             };
 
@@ -215,6 +218,7 @@ impl GameState {
                 .enumerate()
                 .find(|&(ix, p)| p.loc == land_loc && ix != current_player);
             if let Some((which, _)) = already {
+                println!("@@BUMP: {}", player_name(which));
                 current_player = which;
                 delta = 1;
             } else {
@@ -230,6 +234,7 @@ impl GameState {
     // would produce the sequence 1, 2, 2, 2, 2, 1, 2, 2, 2, 2, 1, 2,
     // 2, ...
     fn roll_dice(&mut self) -> DieDots {
+        assert!(self.dice.len() > 0);
         let die = self.dice[self.turn % self.dice.len()];
         self.turn += 1;
         die
@@ -339,7 +344,6 @@ impl BoardConfig {
         use CellProperty::*;
         use PowerType::*;
 
-        let cell_qty = self.cells.len();
         player.loc += delta;
         let cell = &self.cells[player.loc - 1];
 
@@ -350,9 +354,9 @@ impl BoardConfig {
             SnakeStart { .. } if player.powerup == Some(Antivenom) => player.use_antivenom(),
             LadderStart { end: there } if player.powerup == Some(Escalator) => {
                 player.use_escalator(there);
-                if player.loc >= cell_qty {
+                if player.loc >= self.size() {
                     win = true;
-                    player.go(cell_qty);
+                    player.go(self.size());
                 }
             }
             SnakeStart { end: there } | LadderStart { end: there } => player.go(there),
